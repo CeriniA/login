@@ -34,6 +34,9 @@ document.getElementById('forgotPasswordForm').addEventListener('submit', async f
         if (result.ok) {
             successMessage.textContent = 'Se ha enviado un código a tu correo';
             
+            // Mostrar el código de verificación (solo para desarrollo)
+            successMessage.textContent += ` (Código: ${data.verificationCode})`;
+            
             // Agregar botón para verificar código
             const form = document.getElementById('forgotPasswordForm');
             form.innerHTML = `

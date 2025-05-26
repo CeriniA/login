@@ -9,6 +9,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Servir archivos estáticos
+app.use(express.static(__dirname));
+
+// Ruta principal
+app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/index.html');
+});
+
 // Configurar base de datos
 const db = new sqlite3.Database(':memory:');
 
@@ -104,6 +112,110 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({ error: 'Error en el servidor' });
     }
 });
+
+// Ruta para solicitar reseteo de contraseña
+app.post('/api/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        // Verificar si el usuario existe
+        const user = await new Promise((resolve) => {
+            db.get('SELECT * FROM users WHERE email = ?', [email], (err, row) => {
+                resolve(row);
+            });
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: 'No existe un usuario con ese correo' });
+        }
+
+        // Generar código de verificación (por ejemplo, 6 dígitos)
+        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Aquí deberías enviar el código por correo electrónico
+        // Por ahora, simplemente lo almacenamos en la base de datos
+        const stmt = db.prepare('INSERT OR REPLACE INTO password_reset (email, code, expires_at) VALUES (?, ?, ?)');
+        stmt.run(email, verificationCode, new Date(Date.now() + 30 * 60 * 1000).toISOString()); // Código válido por 30 minutos
+        stmt.finalize();
+
+        // Devolver el código (solo para desarrollo)
+        res.json({
+            message: 'Se ha enviado un código a tu correo',
+            verificationCode: verificationCode  // Solo para desarrollo
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Error en el servidor' });
+    }
+});
+
+// Ruta para resetear contraseña
+app.post('/api/reset-password', async (req, res) => {
+    try {
+        const { email, code, newPassword } = req.body;
+
+        // Verificar código de verificación
+        const reset = await new Promise((resolve) => {
+            db.get('SELECT * FROM password_reset WHERE email = ? AND code = ?', [email, code], (err, row) => {
+                resolve(row);
+            });
+        });
+
+        if (!reset) {
+            return res.status(400).json({ error: 'Código de verificación inválido' });
+        }
+
+        // Verificar si el código ha expirado
+        if (new Date(reset.expires_at) < new Date()) {
+            return res.status(400).json({ error: 'Código de verificación ha expirado' });
+        }
+
+        // Hashear nueva contraseña
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Actualizar contraseña del usuario
+        const stmt = db.prepare('UPDATE users SET password = ? WHERE email = ?');
+        stmt.run(hashedPassword, email);
+        stmt.finalize();
+
+        // Eliminar el código de reseteo usado
+        db.run('DELETE FROM password_reset WHERE email = ?', [email]);
+
+        res.json({
+            message: 'Contraseña cambiada exitosamente'
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Error en el servidor' });
+    }
+});
+
+// Crear tabla para almacenar códigos de reseteo
+const createPasswordResetTable = () => {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS password_reset (
+            email TEXT NOT NULL,
+            code TEXT NOT NULL,
+            expires_at DATETIME NOT NULL,
+            PRIMARY KEY (email)
+        )
+    `);
+};
+
+// Crear tabla de usuarios y tabla de reseteo
+const createTables = () => {
+    db.serialize(() => {
+        db.run(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        createPasswordResetTable();
+    });
+};
+
+createTables();
 
 // Ruta protegida (ejemplo)
 app.get('/api/profile', verifyToken, (req, res) => {
